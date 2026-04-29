@@ -39,15 +39,15 @@ ORACLE_TABLE   = os.getenv("ORACLE_NPS_TABLE", "")
 
 def _get_oracle_connection():
     """
-    python-oracledb ile bağlantı döndürür.
-    Kur: pip install oracledb
+    cx_Oracle ile bağlantı döndürür.
+    Kur: pip install cx_Oracle
     """
     try:
-        import oracledb
-        dsn = f"{ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}"
-        return oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=dsn)
+        import cx_Oracle
+        dsn = cx_Oracle.makedsn(ORACLE_HOST, ORACLE_PORT, service_name=ORACLE_SERVICE)
+        return cx_Oracle.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=dsn)
     except ImportError:
-        raise RuntimeError("Oracle bağlantısı için: pip install oracledb")
+        raise RuntimeError("Oracle bağlantısı için: pip install cx_Oracle")
 
 
 def _query_oracle(sql: str) -> pd.DataFrame:
