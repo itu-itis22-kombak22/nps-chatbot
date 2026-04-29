@@ -1,0 +1,67 @@
+﻿SEGMENT,COMMENT_TYPE,EMOTION,adet
+Detractor,Memnuniyet,Minnettar,3339
+Detractor,Memnuniyet,Mutlu,3243
+Detractor,Memnuniyet,Umutlu,3277
+Detractor,Memnuniyet,Veri Yetersiz,3109
+Detractor,Talep/Öneri,Endişeli,2615
+Detractor,Talep/Öneri,Kızgın,2635
+Detractor,Talep/Öneri,Minnettar,2667
+Detractor,Talep/Öneri,Mutlu,2556
+Detractor,Talep/Öneri,Mutsuz,2658
+Detractor,Talep/Öneri,Umutlu,2579
+Detractor,Talep/Öneri,Veri Yetersiz,2746
+Detractor,Veri Yetersiz,Endişeli,742
+Detractor,Veri Yetersiz,Kızgın,705
+Detractor,Veri Yetersiz,Minnettar,653
+Detractor,Veri Yetersiz,Mutlu,700
+Detractor,Veri Yetersiz,Mutsuz,683
+Detractor,Veri Yetersiz,Umutlu,678
+Detractor,Veri Yetersiz,Veri Yetersiz,718
+Detractor,Şikayet,Endişeli,11046
+Detractor,Şikayet,Kızgın,10970
+Detractor,Şikayet,Mutsuz,10698
+Detractor,Şikayet,Veri Yetersiz,10819
+Passive,Memnuniyet,Minnettar,7968
+Passive,Memnuniyet,Mutlu,8071
+Passive,Memnuniyet,Umutlu,8009
+Passive,Memnuniyet,Veri Yetersiz,8100
+Passive,Talep/Öneri,Endişeli,1747
+Passive,Talep/Öneri,Kızgın,1779
+Passive,Talep/Öneri,Minnettar,1767
+Passive,Talep/Öneri,Mutlu,1733
+Passive,Talep/Öneri,Mutsuz,1754
+Passive,Talep/Öneri,Umutlu,1796
+Passive,Talep/Öneri,Veri Yetersiz,1819
+Passive,Veri Yetersiz,Endişeli,499
+Passive,Veri Yetersiz,Kızgın,476
+Passive,Veri Yetersiz,Minnettar,494
+Passive,Veri Yetersiz,Mutlu,467
+Passive,Veri Yetersiz,Mutsuz,481
+Passive,Veri Yetersiz,Umutlu,487
+Passive,Veri Yetersiz,Veri Yetersiz,460
+Passive,Şikayet,Endişeli,3020
+Passive,Şikayet,Kızgın,2948
+Passive,Şikayet,Mutsuz,3091
+Passive,Şikayet,Veri Yetersiz,3095
+Promoter,Memnuniyet,Minnettar,12139
+Promoter,Memnuniyet,Mutlu,12236
+Promoter,Memnuniyet,Umutlu,12311
+Promoter,Memnuniyet,Veri Yetersiz,12456
+Promoter,Talep/Öneri,Endişeli,991
+Promoter,Talep/Öneri,Kızgın,987
+Promoter,Talep/Öneri,Minnettar,1026
+Promoter,Talep/Öneri,Mutlu,936
+Promoter,Talep/Öneri,Mutsuz,1034
+Promoter,Talep/Öneri,Umutlu,992
+Promoter,Talep/Öneri,Veri Yetersiz,952
+Promoter,Veri Yetersiz,Endişeli,347
+Promoter,Veri Yetersiz,Kızgın,333
+Promoter,Veri Yetersiz,Minnettar,377
+Promoter,Veri Yetersiz,Mutlu,361
+Promoter,Veri Yetersiz,Mutsuz,358
+Promoter,Veri Yetersiz,Umutlu,361
+Promoter,Veri Yetersiz,Veri Yetersiz,360
+Promoter,Şikayet,Endişeli,389
+Promoter,Şikayet,Kızgın,389
+Promoter,Şikayet,Mutsuz,391
+Promoter,Şikayet,Veri Yetersiz,377
