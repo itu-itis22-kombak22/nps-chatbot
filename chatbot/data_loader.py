@@ -16,10 +16,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-USE_DB          = os.getenv("USE_DB", "false").lower() == "true"
-RAW_PARQUET     = Path("data/raw/nps_mock_200k.parquet")
-SUMMARY_DIR     = Path("data/processed/ozet_tablolari")
-OZETLER_PARQUET = Path("data/processed/hazir_ozetler/nps_ozetler.parquet")
+USE_DB      = os.getenv("USE_DB", "false").lower() == "true"
+RAW_PARQUET = Path("data/raw/nps_mock_200k.parquet")
+SUMMARY_DIR = Path("data/processed/ozet_tablolari")
+OZETLER_CSV = Path("offline_hazirlik/nps_ozetler.csv")   # offline katman
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,7 +40,10 @@ def _load_summary(name: str) -> pd.DataFrame:
 
 @lru_cache(maxsize=1)
 def _load_ozetler() -> pd.DataFrame:
-    return pd.read_parquet(OZETLER_PARQUET)
+    df = pd.read_csv(OZETLER_CSV, encoding="utf-8-sig")
+    # Sütun adları: "Özet Çeşidi", "Tarih", "Özet"
+    df = df.rename(columns={"Özet Çeşidi": "OZET_CESIDI", "Tarih": "TARIH", "Özet": "OZET"})
+    return df
 
 
 # ──────────────────────────────────────────────────────────────────────────────
