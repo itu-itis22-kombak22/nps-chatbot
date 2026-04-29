@@ -156,17 +156,30 @@ Kullanıcı mesajını analiz et ve SADECE aşağıdaki JSON formatında yanıt 
     "period": "haftalık" | "aylık" | "günlük" | null,
     "category": "<ana kategori adı veya null>",
     "segment": "Detractor" | "Passive" | "Promoter" | null,
-    "emotion": "<duygu adı veya null>"
+    "emotion": "<duygu adı veya null>",
+    "comment_type": "Şikayet" | "Memnuniyet" | "Talep/Öneri" | null,
+    "limit": <kaç örnek istendi, integer veya null>
   }
 }
 
-Açıklamalar:
-- intent    : greeting=selamlama/tanışma/genel sohbet, summary=özet/rapor,
-              topic=kategori/konu analizi, example=yorum göster,
-              direct=sayısal/anlık soru, nonsense=NPS ile tamamen alakasız
-- complete  : true → tüm gerekli parametreler mesajda mevcut (direkt cevap üretilebilir)
-              false → eksik parametre var, detay sormak gerekiyor
-- confidence: tahminin güven skoru
+Intent seçim kuralları (öncelik sırasıyla):
+1. "örnek", "göster", "listele", "ver" gibi kelimeler varsa → MUTLAKA example
+2. "özet", "rapor", "trend", "genel durum" gibi kelimeler varsa → summary
+3. Belirli konu/kategori/segment analizi isteniyorsa → topic
+4. Sayısal soru (kaç tane, oran, yüzde) → direct
+5. Selamlama, tanışma → greeting
+6. NPS ile alakasız → nonsense
+
+Önemli notlar:
+- "X'ten örnek ver", "X şikayet örneği", "X grubu yorumları göster" → MUTLAKA example
+  (şikayet kelimesi olsa bile, örnek/göster/ver varsa example'dır)
+- "0-6 grubu" veya "detractor" → segment: Detractor
+- "7-8 grubu" veya "passive" → segment: Passive
+- "9-10 grubu" veya "promoter" → segment: Promoter
+- "son 1 ayda", "aylık", "bu ay" → period: aylık
+- "son 1 haftada", "haftalık", "bu hafta" → period: haftalık
+- "şikayet" kelimesi tek başına olunca → comment_type: Şikayet (intent değişmez)
+- Kaç tane örnek istendiği belirtilmişse limit parametresine yaz
 
 Sadece JSON döndür.
 """
