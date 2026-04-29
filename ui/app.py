@@ -42,7 +42,8 @@ if "use_llm" not in st.session_state:
 with st.sidebar:
     st.title("⚙️ Ayarlar")
 
-    use_llm = st.toggle("LLM Kullan (Intent Sınıflandırma)", value=True)
+    use_llm = st.toggle("LLM Kullan (Groq / On-prem)", value=True,
+                        help="Kapalıysa sadece keyword eşleşmesi, selamlama ve genel sorular çalışmaz.")
     if use_llm != st.session_state.use_llm:
         st.session_state.use_llm = use_llm
         st.session_state.bot = NPSChatbot(use_llm=use_llm)

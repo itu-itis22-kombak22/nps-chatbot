@@ -106,6 +106,10 @@ _CLARIFY_TEMPLATES = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 _KW: dict[str, list[str]] = {
+    "greeting": [
+        "merhaba", "selam", "hey", "hi", "hello", "günaydın", "iyi günler",
+        "iyi akşamlar", "nasılsın", "naber", "ne haber",
+    ],
     "summary": [
         "özet", "özetle", "haftalık", "aylık", "günlük", "trend",
         "genel durum", "nasıl gidiyor", "rapor", "ne durumda",
@@ -145,7 +149,7 @@ Sen bir banka NPS chatbot'unun intent sınıflandırıcısısın.
 Kullanıcı mesajını analiz et ve SADECE aşağıdaki JSON formatında yanıt ver:
 
 {
-  "intent": "summary" | "topic" | "example" | "direct" | "nonsense",
+  "intent": "greeting" | "summary" | "topic" | "example" | "direct" | "nonsense",
   "confidence": 0.0-1.0,
   "complete": true | false,
   "params": {
@@ -157,8 +161,9 @@ Kullanıcı mesajını analiz et ve SADECE aşağıdaki JSON formatında yanıt 
 }
 
 Açıklamalar:
-- intent    : summary=özet/rapor, topic=kategori/konu analizi, example=yorum göster,
-              direct=sayısal/anlık soru, nonsense=NPS ile alakasız
+- intent    : greeting=selamlama/tanışma/genel sohbet, summary=özet/rapor,
+              topic=kategori/konu analizi, example=yorum göster,
+              direct=sayısal/anlık soru, nonsense=NPS ile tamamen alakasız
 - complete  : true → tüm gerekli parametreler mesajda mevcut (direkt cevap üretilebilir)
               false → eksik parametre var, detay sormak gerekiyor
 - confidence: tahminin güven skoru
@@ -249,14 +254,13 @@ class IntentRouter:
         complete    = intent_data.get("complete", False)
 
         if intent == "nonsense":
-            # DIRECT'te nonsense → yerinde kal, kısa yönlendirme
-            return RouterResult(
-                mode="nonsense",
-                response=_DIRECT_NONSENSE_MSG,
-                params={},
-            )
+            return RouterResult(mode="nonsense", response=_DIRECT_NONSENSE_MSG, params={})
 
-        # Geçerli intent → context'i güncelle
+        if intent == "greeting":
+            # Selamlama → state değişmez, LLM'e bırak
+            return RouterResult(mode="greeting", response=None, params={}, needs_data=True)
+
+        # Geçerli NPS intent → context'i güncelle
         self._update_context(params)
 
         if complete:
