@@ -2,6 +2,7 @@ pandas>=2.1.0
 numpy>=1.26.0
 pyarrow>=14.0.0       # parquet
 tqdm>=4.66.0
-openai>=1.30.0        # GPT API (intent router + offline özetler)
+openai>=1.30.0        # Groq / on-prem LLM (OpenAI-uyumlu)
 streamlit>=1.35.0     # UI
 python-dotenv>=1.0.0  # .env yönetimi
+oracledb>=2.0.0       # Oracle DB bağlantısı (USE_DB=true için)
