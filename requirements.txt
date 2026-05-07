@@ -1,8 +1,9 @@
 pandas>=2.1.0
 numpy>=1.26.0
-pyarrow>=14.0.0       # parquet
+pyarrow>=14.0.0
 tqdm>=4.66.0
-openai>=1.30.0        # Groq / on-prem LLM (OpenAI-uyumlu)
-streamlit>=1.35.0     # UI
-python-dotenv>=1.0.0  # .env yönetimi
-cx_Oracle>=8.3.0      # Oracle DB bağlantısı (USE_DB=true için)
+httpx>=0.27.0
+streamlit>=1.35.0
+plotly>=5.22.0
+python-dotenv>=1.0.0
+oracledb>=2.3.0

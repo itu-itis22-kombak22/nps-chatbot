@@ -52,10 +52,10 @@ Tarayıcı otomatik açılmazsa: **http://localhost:8501**
 
 ```
 nps-chatbot/
-├── .env                          # Groq API key (hazır, değiştirmeye gerek yok)
+├── .env                          # LiteLLM API key ve endpoint ayarları
 ├── config/
 │   ├── constants.py              # 19 kategori, duygu ve yorum tipi listeleri
-│   └── llm_config.py             # LLM bağlantı ayarları (Groq varsayılan)
+│   └── llm_config.py             # LLM bağlantı ayarları (LiteLLM varsayılan)
 ├── etl/
 │   ├── generate_mock_data.py     # 200k mock veri üretici
 │   └── offline_prep.py           # Özet tabloları ve metin özetleri üretici

@@ -1,53 +1,65 @@
 """
-Veri erişim katmanı.
+Data access layer.
 
-USE_DB=false → Parquet/CSV dosyalarından okur (geliştirme/test)
-USE_DB=true  → Oracle DB'den okur (production)
-
-Oracle parametreleri .env dosyasından okunur:
-    ORACLE_HOST, ORACLE_PORT, ORACLE_SERVICE
-    ORACLE_USER, ORACLE_PASSWORD
-    ORACLE_NPS_TABLE  → ham NPS verisi tablosu
+USE_DB=false reads local parquet/CSV files for development.
+USE_DB=true reads the raw NPS table from Oracle.
 """
 
+from __future__ import annotations
+
 import os
-from pathlib import Path
+import unicodedata
 from functools import lru_cache
+from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
-USE_DB      = os.getenv("USE_DB", "false").lower() == "true"
+USE_DB = os.getenv("USE_DB", "false").lower() == "true"
 RAW_PARQUET = Path("data/raw/nps_mock_200k.parquet")
 SUMMARY_DIR = Path("data/processed/ozet_tablolari")
 OZETLER_CSV = Path("offline_hazirlik/nps_ozetler.csv")
 
-# Oracle parametreleri
-ORACLE_HOST    = os.getenv("ORACLE_HOST", "")
-ORACLE_PORT    = os.getenv("ORACLE_PORT", "1521")
+ORACLE_HOST = os.getenv("ORACLE_HOST", "")
+ORACLE_PORT = os.getenv("ORACLE_PORT", "1521")
 ORACLE_SERVICE = os.getenv("ORACLE_SERVICE", "")
-ORACLE_USER    = os.getenv("ORACLE_USER", "")
-ORACLE_PASSWORD= os.getenv("ORACLE_PASSWORD", "")
-ORACLE_TABLE   = os.getenv("ORACLE_NPS_TABLE", "")
+ORACLE_USER = os.getenv("ORACLE_USER", "")
+ORACLE_PASSWORD = os.getenv("ORACLE_PASSWORD", "")
+ORACLE_TABLE = os.getenv("ORACLE_NPS_TABLE", "")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Oracle bağlantısı
-# ──────────────────────────────────────────────────────────────────────────────
+def _normalize_text(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).casefold().replace("ı", "i")
+    text = "".join(
+        ch for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
+    return text
+
+
+def _period_key(period: str | None) -> str | None:
+    norm = _normalize_text(period)
+    if "hafta" in norm:
+        return "weekly"
+    if "ay" in norm:
+        return "monthly"
+    if "gun" in norm:
+        return "daily"
+    return None
+
 
 def _get_oracle_connection():
-    """
-    cx_Oracle ile bağlantı döndürür.
-    Kur: pip install cx_Oracle
-    """
     try:
-        import cx_Oracle
-        dsn = cx_Oracle.makedsn(ORACLE_HOST, ORACLE_PORT, service_name=ORACLE_SERVICE)
-        return cx_Oracle.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=dsn)
-    except ImportError:
-        raise RuntimeError("Oracle bağlantısı için: pip install cx_Oracle")
+        import oracledb
+    except ImportError as exc:
+        raise RuntimeError("Oracle baglantisi icin: pip install oracledb") from exc
+
+    dsn = oracledb.makedsn(ORACLE_HOST, ORACLE_PORT, service_name=ORACLE_SERVICE)
+    return oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=dsn)
 
 
 def _query_oracle(sql: str) -> pd.DataFrame:
@@ -59,10 +71,6 @@ def _query_oracle(sql: str) -> pd.DataFrame:
     finally:
         conn.close()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Parquet loader (geliştirme)
-# ──────────────────────────────────────────────────────────────────────────────
 
 @lru_cache(maxsize=1)
 def _load_raw_parquet() -> pd.DataFrame:
@@ -79,13 +87,17 @@ def _load_summary(name: str) -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def _load_ozetler() -> pd.DataFrame:
     df = pd.read_csv(OZETLER_CSV, encoding="utf-8-sig")
-    df = df.rename(columns={"Özet Çeşidi": "OZET_CESIDI", "Tarih": "TARIH", "Özet": "OZET"})
-    return df
+    rename_map = {
+        "Ozet Cesidi": "OZET_CESIDI",
+        "Ozet": "OZET",
+        "Tarih": "TARIH",
+        "Özet Çeşidi": "OZET_CESIDI",
+        "Özet": "OZET",
+        "Ã–zet Ã‡eÅŸidi": "OZET_CESIDI",
+        "Ã–zet": "OZET",
+    }
+    return df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Public API
-# ──────────────────────────────────────────────────────────────────────────────
 
 def get_raw(
     period: str | None = None,
@@ -95,16 +107,22 @@ def get_raw(
     comment_type: str | None = None,
     nps_min: int | None = None,
     nps_max: int | None = None,
+    date_start: str | None = None,
+    date_end: str | None = None,
 ) -> pd.DataFrame:
-    """Ham NPS verisini filtreli döndürür. USE_DB=true ise Oracle'dan okur."""
+    """Return raw NPS rows with optional filters."""
 
     if USE_DB:
-        df = _load_raw_oracle(period, category, segment, emotion, comment_type, nps_min, nps_max)
-    else:
-        df = _load_raw_parquet().copy()
-        df = _apply_filters(df, period, category, segment, emotion, comment_type, nps_min, nps_max)
+        return _load_raw_oracle(
+            period, category, segment, emotion, comment_type,
+            nps_min, nps_max, date_start, date_end,
+        )
 
-    return df
+    df = _load_raw_parquet().copy()
+    return _apply_filters(
+        df, period, category, segment, emotion, comment_type,
+        nps_min, nps_max, date_start, date_end,
+    )
 
 
 def get_summary_table(name: str) -> pd.DataFrame:
@@ -116,28 +134,34 @@ def get_summary_table(name: str) -> pd.DataFrame:
 
 
 def get_ozetler(ozet_cesidi: str | None = None, tarih: str | None = None) -> pd.DataFrame:
-    """offline_hazirlik/nps_ozetler.csv'den filtreli özet döndürür."""
+    """Return prepared text summaries from offline_hazirlik/nps_ozetler.csv."""
     df = _load_ozetler()
-    if ozet_cesidi:
+    if ozet_cesidi and "OZET_CESIDI" in df.columns:
         df = df[df["OZET_CESIDI"] == ozet_cesidi]
-    if tarih:
+    if tarih and "TARIH" in df.columns:
         df = df[df["TARIH"] >= tarih]
-    return df.sort_values("TARIH", ascending=False)
+    if "TARIH" in df.columns:
+        return df.sort_values("TARIH", ascending=False)
+    return df
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Oracle okuma (USE_DB=true)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _load_raw_oracle(period, category, segment, emotion, comment_type, nps_min, nps_max) -> pd.DataFrame:
-    """Filtreleri WHERE clause'a çevirip Oracle'dan çeker."""
+def _load_raw_oracle(
+    period, category, segment, emotion, comment_type,
+    nps_min, nps_max, date_start, date_end,
+) -> pd.DataFrame:
     conditions = ["1=1"]
 
-    if period == "haftalık":
+    if date_start:
+        conditions.append(f"INPUT_AS_OF_DATE >= DATE '{date_start}'")
+    if date_end:
+        conditions.append(f"INPUT_AS_OF_DATE < DATE '{date_end}' + 1")
+
+    period_key = _period_key(period)
+    if not date_start and not date_end and period_key == "weekly":
         conditions.append("INPUT_AS_OF_DATE >= SYSDATE - 7")
-    elif period == "aylık":
+    elif not date_start and not date_end and period_key == "monthly":
         conditions.append("INPUT_AS_OF_DATE >= SYSDATE - 30")
-    elif period == "günlük":
+    elif not date_start and not date_end and period_key == "daily":
         conditions.append("INPUT_AS_OF_DATE >= SYSDATE - 1")
 
     if category:
@@ -147,11 +171,10 @@ def _load_raw_oracle(period, category, segment, emotion, comment_type, nps_min, 
     if comment_type:
         conditions.append(f"UPPER(COMMENT_TYPE) = UPPER('{comment_type}')")
     if nps_min is not None:
-        conditions.append(f"NPS_SCORE >= {nps_min}")
+        conditions.append(f"NPS_SCORE >= {int(nps_min)}")
     if nps_max is not None:
-        conditions.append(f"NPS_SCORE <= {nps_max}")
+        conditions.append(f"NPS_SCORE <= {int(nps_max)}")
 
-    # Segment → NPS aralığına çevir
     if segment == "Detractor":
         conditions.append("NPS_SCORE <= 6")
     elif segment == "Passive":
@@ -167,35 +190,41 @@ def _load_raw_oracle(period, category, segment, emotion, comment_type, nps_min, 
     return df
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Filtre yardımcısı (Parquet modu)
-# ──────────────────────────────────────────────────────────────────────────────
+def _apply_filters(
+    df, period, category, segment, emotion, comment_type,
+    nps_min, nps_max, date_start, date_end,
+):
+    if date_start:
+        df = df[df["INPUT_AS_OF_DATE"] >= pd.to_datetime(date_start)]
+    if date_end:
+        end = pd.to_datetime(date_end) + pd.Timedelta(days=1)
+        df = df[df["INPUT_AS_OF_DATE"] < end]
 
-def _apply_filters(df, period, category, segment, emotion, comment_type, nps_min, nps_max):
-    if period == "haftalık":
+    period_key = _period_key(period)
+    if not date_start and not date_end and period_key == "weekly":
         cutoff = df["INPUT_AS_OF_DATE"].max() - pd.Timedelta(weeks=1)
         df = df[df["INPUT_AS_OF_DATE"] >= cutoff]
-    elif period == "aylık":
+    elif not date_start and not date_end and period_key == "monthly":
         cutoff = df["INPUT_AS_OF_DATE"].max() - pd.Timedelta(days=30)
         df = df[df["INPUT_AS_OF_DATE"] >= cutoff]
-    elif period == "günlük":
+    elif not date_start and not date_end and period_key == "daily":
         cutoff = df["INPUT_AS_OF_DATE"].max() - pd.Timedelta(days=1)
         df = df[df["INPUT_AS_OF_DATE"] >= cutoff]
 
     if category:
-        df = df[df["FIRST_MAIN_CATEGORY"].str.lower() == category.lower()]
+        df = df[df["FIRST_MAIN_CATEGORY"].str.casefold() == str(category).casefold()]
     if segment:
         seg_map = {"Detractor": (0, 6), "Passive": (7, 8), "Promoter": (9, 10)}
         if segment in seg_map:
             lo, hi = seg_map[segment]
             df = df[(df["NPS_SCORE"] >= lo) & (df["NPS_SCORE"] <= hi)]
     if emotion:
-        df = df[df["EMOTION"].str.lower() == emotion.lower()]
+        df = df[df["EMOTION"].str.casefold() == str(emotion).casefold()]
     if comment_type:
-        df = df[df["COMMENT_TYPE"].str.lower() == comment_type.lower()]
+        df = df[df["COMMENT_TYPE"].str.casefold() == str(comment_type).casefold()]
     if nps_min is not None:
-        df = df[df["NPS_SCORE"] >= nps_min]
+        df = df[df["NPS_SCORE"] >= int(nps_min)]
     if nps_max is not None:
-        df = df[df["NPS_SCORE"] <= nps_max]
+        df = df[df["NPS_SCORE"] <= int(nps_max)]
 
     return df

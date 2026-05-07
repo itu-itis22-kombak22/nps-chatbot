@@ -30,23 +30,15 @@ st.set_page_config(
 # Session state
 # ──────────────────────────────────────────────────────────────────────────────
 if "bot" not in st.session_state:
-    st.session_state.bot = NPSChatbot(use_llm=True)
+    st.session_state.bot = NPSChatbot()
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "use_llm" not in st.session_state:
-    st.session_state.use_llm = True
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar — Ayarlar ve Metrikler
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ Ayarlar")
-
-    use_llm = st.toggle("LLM Kullan (Groq / On-prem)", value=True,
-                        help="Kapalıysa sadece keyword eşleşmesi, selamlama ve genel sorular çalışmaz.")
-    if use_llm != st.session_state.use_llm:
-        st.session_state.use_llm = use_llm
-        st.session_state.bot = NPSChatbot(use_llm=use_llm)
 
     if st.button("🔄 Konuşmayı Sıfırla"):
         st.session_state.messages = []
