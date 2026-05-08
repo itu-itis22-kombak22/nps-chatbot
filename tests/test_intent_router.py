@@ -302,6 +302,33 @@ class RouterMemoryFlowTests(TraceTestCase):
         self.assertEqual(second_bad.mode, "nonsense")
         self.assertEqual(router.current_state, ir.State.DIRECT)
 
+    def test_detail_valid_slot_then_one_bad_answer_stays_in_detail(self):
+        """DETAIL tolerance resets after a valid slot, so the next bad answer gets one retry."""
+        responses = [
+            llm_payload("analytics", "example"),
+            llm_payload(
+                "analytics",
+                "none",
+                slots={"date_expression": "subat 2024"},
+            ),
+            llm_payload("ambiguous", "none", confidence=0.2, assistant_message="Bu cevap NPS sorgusunu tamamlamiyor."),
+        ]
+
+        with patch.object(ir, "_llm_extract", side_effect=traced_llm_responses(self, responses)):
+            router = ir.IntentRouter()
+            start = self.trace_turn(router, "ornek yorum getir")
+            valid_detail = self.trace_turn(router, "subat 2024")
+            first_bad_after_valid = self.trace_turn(router, "mavi kalem ucuyor")
+
+        self.assertEqual(start.mode, "detail")
+        self.assertEqual(valid_detail.mode, "detail")
+        self.assertEqual(first_bad_after_valid.mode, "detail")
+        self.assertEqual(router.current_state, ir.State.DETAIL)
+        self.assertEqual(router.conv.detail_nonsense_count, 1)
+        self.assertEqual(router.conv.pending_mode, "example")
+        self.assertEqual(router.conv.context["date_start"], "2024-02-01")
+        self.assertEqual(router.conv.context["date_end"], "2024-02-29")
+
     def test_confirmation_acceptance_runs_pending_query(self):
         """Confirmation state: 'tamam' should execute the pending structured query."""
         router = ir.IntentRouter()
