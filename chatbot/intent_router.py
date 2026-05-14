@@ -82,12 +82,6 @@ class RouterResult:
     structured_query: dict | None = None
 
 
-_DIRECT_NONSENSE_MSG = (
-    "Bu mesaj NPS analitigi kapsaminda gorunmuyor. NPS ozetleri, trendler, "
-    "kategori analizleri veya ornek yorumlar hakkinda soru sorabilirsiniz."
-)
-_ON_IT_MSG = "Anliyorum, hemen bakiyorum."
-
 _CATEGORY_ALIASES = {
     "alisveris kredisi": "Alışveriş Kredisi",
     "atm": "ATM",
@@ -174,8 +168,9 @@ Tarih ifadesini normalize etme; ham ifadeyi date_expression alanina yaz.
 Kategori adini kullanicinin dedigi haliyle yaz, canonical yapmak kod tarafinda yapilacak.
 Emin degilsen confidence dusuk tut.
 
-assistant_message alanina sadece veri sorgusu gerektirmeyen cevaplarda veya takip sorusu gerekiyorsa
-kisa Turkce cevap/takip sorusu yaz. Sorgu calismaya hazirsa assistant_message null olsun.
+assistant_message alanina veri sorgusu gerektirmeyen cevaplarda veya takip sorusu gerekiyorsa
+mutlaka kisa, dogal ve sohbet hissi veren Turkce cevap/takip sorusu yaz.
+Sorgu calismaya hazirsa assistant_message null olabilir.
 Analytics mesajlarda target_mode sadece summary/topic/example olabilir.
 Kullanici "NPS ile ilgili soru soracagim" gibi hazirlik cumlesi yazarsa target_mode none olsun.
 Summary ve topic icin tarih yoksa date_expression eksik say.
@@ -209,6 +204,7 @@ JSON semasi:
 """
 
 
+# Normalization helpers make Turkish/ascii/mojibake variants comparable without touching source data.
 def _repair_mojibake(text: str) -> str:
     try:
         return text.encode("latin1").decode("utf-8")
@@ -257,6 +253,7 @@ def _llm_extract(text: str, conversation_context: dict[str, Any] | None = None) 
     return data
 
 
+# Canonicalizers are the deterministic guardrail after the LLM extracts raw slots.
 def _canonical_category(value: Any) -> str | None:
     if not value:
         return None
@@ -361,6 +358,7 @@ def _contains_month_name(text: Any) -> bool:
     return re.search(rf"\b{_month_token_pattern()}\b", _normalize(str(text))) is not None
 
 
+# Date parsing stays code-side so relative ranges and month/year rules are testable.
 def _normalize_date_expression(raw_value: Any, today: date | None = None) -> tuple[dict[str, str], str | None]:
     if not raw_value:
         return {}, None
@@ -504,6 +502,7 @@ def _params_from_query(query: StructuredQuery) -> dict:
     return params
 
 
+# Validate and enrich the LLM JSON: normalize slots, find missing info, and build mode-ready params.
 def _validate_and_complete(data: dict) -> RouterOutput:
     message_type = data.get("message_type") or "ambiguous"
     target_mode = data.get("target_mode") or "none"
@@ -587,34 +586,66 @@ def _validate_and_complete(data: dict) -> RouterOutput:
     )
 
 
-def _clarify_message(output: RouterOutput) -> str:
+def _assistant_reply(output: RouterOutput, situation: str, context: dict[str, Any] | None = None) -> str:
+    """Prefer the router LLM's own wording; ask it once more only when code found a missing detail."""
     if output.assistant_message:
         return output.assistant_message
-    if "date_year" in output.missing_slots:
-        return "Bir aralık/ay belirttiniz; hangi yil icin bakayim? Ornek: Ocak 2026."
-    if "date_range" in output.missing_slots:
-        return "Hangi donem icin bakayim? Ornek: gecen ay, son 1 ay, bu hafta."
-    if "category" in output.missing_slots:
-        return "Hangi kategori icin analiz edeyim? Ornek: Mobil Bankacilik, ATM, Kartlar."
-    if "filter" in output.missing_slots:
-        return "Ornek yorum icin kategori, segment, duygu veya yorum tipi belirtir misiniz?"
-    if "target_mode" in output.missing_slots:
-        return "NPS verisinde ozet, trend, kirilim ya da ornek yorum mu istiyorsunuz?"
-    return "Sorguyu netlestirmek icin biraz daha detay verebilir misiniz?"
+
+    fallback = {
+        "ask_detail": "Sorguyu tamamlamak icin biraz daha detay verir misiniz?",
+        "confirm": "Bu sorguyu calistirmadan once onaylar misiniz?",
+        "out_of_scope": "NPS yorumlari, skorlar, trendler veya ornek musteri yorumlari hakkinda yardimci olabilirim.",
+        "detail_retry": "Sorguyu tamamlamak icin tarih, kategori veya filtre bilgisini biraz daha net yazar misiniz?",
+        "detail_cancel": "Bu akisi kapatiyorum; yeni bir NPS sorusu sorabilirsiniz.",
+    }.get(situation, "Size NPS yorumlari ve musteri geri bildirimleri konusunda yardimci olabilirim.")
+
+    if output.source != "llm":
+        return fallback
+
+    try:
+        return chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sen bir banka NPS chatbot'usun. Kullaniciya tek veya iki cumlelik, "
+                        "dogal, Turkce ve yardimci bir cevap yaz. JSON yazma."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "situation": situation,
+                            "target_mode": output.target_mode,
+                            "missing_slots": output.missing_slots,
+                            "known_slots": output.slots,
+                            "conversation_context": context or {},
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0.4,
+            max_tokens=140,
+        )
+    except Exception as e:
+        logger.warning("[assistant_reply] llm error=%s", e)
+        return fallback
 
 
 class IntentRouter:
+    """Small state machine: understand message -> complete slots -> return a mode dispatch result."""
+
     def __init__(self):
         self.conv = ConversationState()
         self.last_debug_json: dict[str, Any] | None = None
-        self._last_output: RouterOutput | None = None
 
     def process(self, user_message: str) -> RouterResult:
         text = user_message.strip()
         start_state = self.conv.state.name
         logger.info("[router.input] state=%s text=%r", self.conv.state.name, text)
         self.last_debug_json = None
-        self._last_output = None
 
         if self.conv.state == State.DIRECT:
             output = self._prepare_output(self._understand(text))
@@ -633,7 +664,6 @@ class IntentRouter:
         old_state = self.conv.state
         self.conv = ConversationState()
         self.last_debug_json = None
-        self._last_output = None
         logger.info("[router.transition] %s -> %s reason=reset", old_state.name, self.conv.state.name)
 
     @property
@@ -655,14 +685,14 @@ class IntentRouter:
                 )
                 return RouterResult(
                     mode=self.conv.pending_mode,
-                    response=_ON_IT_MSG,
+                    response=None,
                     params=self.conv.pending_params.copy(),
                     needs_data=True,
                     structured_query=self.conv.last_structured_query,
                 )
             if command in {"hayir", "iptal", "vazgec", "dur", "calistirma"}:
                 self._go_direct("confirmation_rejected")
-                return RouterResult("cancelled", "Tamam, sorguyu calistirmiyorum.", {})
+                return RouterResult("cancelled", None, {})
 
         output = self._understand(text)
         output = self._prepare_output(output)
@@ -692,7 +722,6 @@ class IntentRouter:
             }
 
         output = _validate_and_complete(raw)
-        self._last_output = output
         logger.info(
             "[router.decision] state=%s source=%s message_type=%s target_mode=%s action=%s confidence=%s complete=%s missing=%s slots=%s",
             self.conv.state.name,
@@ -708,6 +737,7 @@ class IntentRouter:
         return output
 
     def _prepare_output(self, output: RouterOutput) -> RouterOutput:
+        # Follow-up messages like "Mart icin de" inherit the previous mode and filters.
         context_mode = self.conv.pending_mode if self.conv.pending_mode in {"summary", "topic", "example"} else None
         if context_mode is None and self.conv.last_structured_query:
             mode = self.conv.last_structured_query.get("analysis_type")
@@ -746,6 +776,7 @@ class IntentRouter:
         return output
 
     def _handle_output(self, output: RouterOutput) -> RouterResult:
+        # Non-analytics turns answer directly; analytics turns either ask detail or dispatch a mode.
         if output.message_type == "small_talk":
             self._log_transition(self.conv.state, self.conv.state, "small_talk")
             return RouterResult("greeting", None, {}, needs_data=True)
@@ -758,7 +789,7 @@ class IntentRouter:
             if self.conv.state == State.DETAIL:
                 return self._handle_detail_non_analytics(output)
             self._log_transition(self.conv.state, self.conv.state, output.message_type)
-            return RouterResult("nonsense", output.assistant_message or _DIRECT_NONSENSE_MSG, {})
+            return RouterResult("nonsense", _assistant_reply(output, "out_of_scope"), {})
 
         self._merge_context(output)
 
@@ -774,7 +805,7 @@ class IntentRouter:
             self._log_transition(old_state, self.conv.state, "requires_confirmation")
             return RouterResult(
                 "confirm",
-                output.assistant_message or "Bu sorguyu calistirmadan once onaylar misiniz?",
+                _assistant_reply(output, "confirm", {"params": params}),
                 self.conv.context.copy(),
             )
 
@@ -783,7 +814,7 @@ class IntentRouter:
             old_state = self.conv.state
             self.conv.state = State.DETAIL
             self._log_transition(old_state, self.conv.state, f"missing_slots_{','.join(output.missing_slots)}")
-            return RouterResult("detail", _clarify_message(output), self.conv.context.copy())
+            return RouterResult("detail", _assistant_reply(output, "ask_detail"), self.conv.context.copy())
 
         query = output.structured_query or _build_structured_query(output.target_mode, output.slots, {})
         params = _params_from_query(query)
@@ -798,7 +829,7 @@ class IntentRouter:
 
         return RouterResult(
             mode=mode,
-            response=_ON_IT_MSG,
+            response=None,
             params=params,
             needs_data=True,
             structured_query=self.conv.last_structured_query,
@@ -810,23 +841,16 @@ class IntentRouter:
             self._go_direct("detail_non_analytics_limit")
             return RouterResult(
                 "nonsense",
-                output.assistant_message or "Sorguyu tamamlayamadim. Yeni bir NPS sorusu sorabilirsiniz.",
+                _assistant_reply(output, "detail_cancel", {"pending_mode": self.conv.pending_mode}),
                 {},
             )
 
-        if output.assistant_message:
-            response = output.assistant_message
-        elif self.conv.pending_mode == "example":
-            response = "Yorumlari getirmek icin tarih, kategori, segment veya duygu gibi bir filtre belirtir misiniz?"
-        elif self.conv.pending_mode == "topic":
-            response = "Konu analizini tamamlamak icin tarih ve kategori/konu detayini belirtir misiniz?"
-        elif self.conv.pending_mode == "summary":
-            response = "Ozeti tamamlamak icin hangi donem icin bakacagimi belirtir misiniz?"
-        else:
-            response = "Sorguyu netlestirmek icin biraz daha detay verir misiniz?"
-
         self._log_transition(self.conv.state, self.conv.state, output.message_type)
-        return RouterResult("detail", response, self.conv.context.copy())
+        return RouterResult(
+            "detail",
+            _assistant_reply(output, "detail_retry", {"pending_mode": self.conv.pending_mode}),
+            self.conv.context.copy(),
+        )
 
     def _debug_json(self, result: RouterResult, start_state: str) -> dict:
         params = result.params or {}
@@ -873,6 +897,7 @@ class IntentRouter:
             logger.info("[router.context] %s -> %s", before, self.conv.context)
 
     def _rebuild_from_context(self, output: RouterOutput) -> RouterOutput:
+        # Re-run validation after context merge so inherited slots become a complete query.
         slots = output.slots.copy()
         for key, value in self.conv.context.items():
             if slots.get(key) is None:

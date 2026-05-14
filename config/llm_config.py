@@ -33,6 +33,7 @@ API_KEY = os.getenv("LITELLM_API_KEY", "")
 MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 TIMEOUT = float(os.getenv("LITELLM_TIMEOUT", "60"))
 VERIFY_SSL = os.getenv("LITELLM_VERIFY_SSL", "false").lower() in {"1", "true", "yes", "on"}
+TRUST_ENV = os.getenv("LITELLM_TRUST_ENV", "false").lower() in {"1", "true", "yes", "on"}
 CTX_SIZE = int(os.getenv("LLM_CONTEXT_WINDOW", "131072"))
 
 
@@ -57,15 +58,16 @@ def chat(messages: list[dict], temperature: float = 0.2, max_tokens: int = 1024)
         "max_tokens": max_tokens,
     }
 
-    with httpx.Client(verify=VERIFY_SSL, timeout=TIMEOUT) as client:
+    with httpx.Client(verify=VERIFY_SSL, timeout=TIMEOUT, trust_env=TRUST_ENV) as client:
         logger.debug(
-            "[http] post url=%s model=%s message_count=%s max_tokens=%s temperature=%s verify_ssl=%s",
+            "[http] post url=%s model=%s message_count=%s max_tokens=%s temperature=%s verify_ssl=%s trust_env=%s",
             URL,
             MODEL,
             len(messages),
             max_tokens,
             temperature,
             VERIFY_SSL,
+            TRUST_ENV,
         )
         response = client.post(URL, headers=_headers(), json=payload)
         logger.debug("[http] status=%s", response.status_code)

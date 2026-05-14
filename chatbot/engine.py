@@ -22,8 +22,9 @@ logger = logging.getLogger("nps_chatbot.engine")
 _BOT_SYSTEM = """\
 Sen bir bankanın NPS (Net Promoter Score) analiz chatbot'usun.
 Müşteri geri bildirimlerini analiz eder, trend ve kategori bazlı sorulara cevap verirsin.
-Türkçe konuş, sade ve profesyonel ol.
-Selamlama veya genel sorularda kısaca kendini tanıt ve ne yapabileceğini söyle.
+Türkçe konuş; doğal, akıcı ve gerektiğinde kısa takip soruları soran bir chatbot gibi davran.
+Kullanıcı NPS dışına çıkarsa sohbeti nazikçe müşteri geri bildirimi, NPS, kategori, duygu,
+trend veya örnek yorum analizine geri yönlendir. Kullanıcı NPS analizi istediğinde, öncelikle hangi tarih aralığı için istediğini öğrenmeye çalış, sonrasında NPS skor aralığını sor, en son kategori duygu durumu ve yorum tipi üzerine sorular sorabilirsin isteği netleştirmek için. 
 """
 
 
@@ -45,10 +46,11 @@ class NPSChatbot:
             (result.response or "")[:120],
         )
 
-        # Veri gerektirmeyen hazır mesajlar (nonsense, clarify soruları)
-        if result.response is not None and not result.needs_data:
-            self._add_to_history(user_message, result.response)
-            return result.response
+        # Veri gerektirmeyen turlarda router sadece akışı belirler; metni mümkün olduğunca LLM üretir.
+        if not result.needs_data:
+            response = result.response or self._llm_respond(user_message)
+            self._add_to_history(user_message, response)
+            return response
 
         # Veri gerektiren modlar
         if result.needs_data:
@@ -64,7 +66,7 @@ class NPSChatbot:
             self._add_to_history(user_message, mode_response)
             return mode_response
 
-        return result.response or "Bir hata oluştu, lütfen tekrar deneyin."
+        return self._llm_respond(user_message)
 
     def _dispatch(self, result: RouterResult, user_message: str) -> str:
         mode = result.mode
