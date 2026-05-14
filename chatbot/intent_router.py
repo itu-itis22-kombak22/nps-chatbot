@@ -350,57 +350,15 @@ def _month_range(year: int, month: int, raw: str) -> dict[str, str]:
     return _date_range(start, end, "month", raw)
 
 
-def _month_name_pattern() -> str:
-    return "|".join(_MONTHS.keys())
-
-
 def _month_token_pattern() -> str:
     suffix = r"(?:\s+ayi|\s+ayina|\s+ayinda|\s+ayinin|tan|ten|dan|den|ta|te|da|de)?"
-    return rf"({_month_name_pattern()}){suffix}"
+    return rf"({'|'.join(_MONTHS.keys())}){suffix}"
 
 
 def _contains_month_name(text: Any) -> bool:
     if not text:
         return False
     return re.search(rf"\b{_month_token_pattern()}\b", _normalize(str(text))) is not None
-
-
-def _has_year(text: Any) -> bool:
-    return bool(text and re.search(r"\b\d{4}\b", str(text)))
-
-
-def _year_from_context(context: dict[str, Any], last_query: dict[str, Any] | None) -> int | None:
-    raw = context.get("date_expression")
-    if raw:
-        match = re.search(r"\b(\d{4})\b", str(raw))
-        if match:
-            return int(match.group(1))
-
-    if last_query:
-        start = (last_query.get("date_range") or {}).get("start")
-        if start:
-            match = re.match(r"(\d{4})-", str(start))
-            if match:
-                return int(match.group(1))
-
-    return None
-
-
-def _apply_context_year(
-    slots: dict[str, Any],
-    context: dict[str, Any],
-    last_query: dict[str, Any] | None,
-) -> dict[str, Any]:
-    raw_date = slots.get("date_expression")
-    if raw_date and _contains_month_name(raw_date) and not _has_year(raw_date):
-        year = _year_from_context(context, last_query)
-        if year:
-            slots["date_expression"] = f"{raw_date} {year}"
-    return slots
-
-
-def _has_meaningful_slot(slots: dict[str, Any]) -> bool:
-    return any(value is not None for key, value in slots.items() if key != "metric")
 
 
 def _normalize_date_expression(raw_value: Any, today: date | None = None) -> tuple[dict[str, str], str | None]:
@@ -472,22 +430,6 @@ def _normalize_date_expression(raw_value: Any, today: date | None = None) -> tup
         return _date_range(start, end, "year", raw), None
 
     return {}, None
-
-
-def _mode_for_target(target_mode: str) -> str:
-    if target_mode in {"summary", "topic", "example"}:
-        return target_mode
-    return "summary"
-
-
-def _is_yes(text: str) -> bool:
-    norm = _normalize(text)
-    return norm in {"evet", "onay", "onayla", "tamam", "calistir", "baslat", "olur"}
-
-
-def _is_no(text: str) -> bool:
-    norm = _normalize(text)
-    return norm in {"hayir", "iptal", "vazgec", "dur", "calistirma"}
 
 
 def _build_structured_query(target_mode: str, slots: dict[str, Any], date_range: dict[str, str]) -> StructuredQuery:
@@ -664,37 +606,47 @@ def _clarify_message(output: RouterOutput) -> str:
 class IntentRouter:
     def __init__(self):
         self.conv = ConversationState()
+        self.last_debug_json: dict[str, Any] | None = None
+        self._last_output: RouterOutput | None = None
 
     def process(self, user_message: str) -> RouterResult:
         text = user_message.strip()
+        start_state = self.conv.state.name
         logger.info("[router.input] state=%s text=%r", self.conv.state.name, text)
+        self.last_debug_json = None
+        self._last_output = None
 
         if self.conv.state == State.DIRECT:
-            return self._handle_direct(text)
-        if self.conv.state == State.DETAIL:
-            return self._handle_detail(text)
+            output = self._prepare_output(self._understand(text))
+            result = self._handle_output(output)
+        elif self.conv.state == State.DETAIL:
+            result = self._handle_detail(text)
+        else:
+            self._go_direct("unexpected_response_state")
+            output = self._prepare_output(self._understand(text))
+            result = self._handle_output(output)
 
-        self._go_direct("unexpected_response_state")
-        return self._handle_direct(text)
+        self.last_debug_json = self._debug_json(result, start_state)
+        return result
 
     def reset(self):
         old_state = self.conv.state
         self.conv = ConversationState()
+        self.last_debug_json = None
+        self._last_output = None
         logger.info("[router.transition] %s -> %s reason=reset", old_state.name, self.conv.state.name)
 
     @property
     def current_state(self) -> State:
         return self.conv.state
 
-    def _handle_direct(self, text: str) -> RouterResult:
-        output = self._understand(text)
-        output = self._prepare_output(output)
-        return self._handle_output(output)
-
     def _handle_detail(self, text: str) -> RouterResult:
         if self.conv.last_structured_query and self.conv.pending_mode:
-            if _is_yes(text):
-                self._set_state(State.RESPONSE, "confirmation_accepted")
+            command = _normalize(text)
+            if command in {"evet", "onay", "onayla", "tamam", "calistir", "baslat", "olur"}:
+                old_state = self.conv.state
+                self.conv.state = State.RESPONSE
+                self._log_transition(old_state, self.conv.state, "confirmation_accepted")
                 logger.info(
                     "[router.ready] mode=%s structured_query=%s params=%s",
                     self.conv.pending_mode,
@@ -708,7 +660,7 @@ class IntentRouter:
                     needs_data=True,
                     structured_query=self.conv.last_structured_query,
                 )
-            if _is_no(text):
+            if command in {"hayir", "iptal", "vazgec", "dur", "calistirma"}:
                 self._go_direct("confirmation_rejected")
                 return RouterResult("cancelled", "Tamam, sorguyu calistirmiyorum.", {})
 
@@ -718,7 +670,15 @@ class IntentRouter:
 
     def _understand(self, text: str) -> RouterOutput:
         try:
-            raw = _llm_extract(text, self._conversation_context())
+            raw = _llm_extract(
+                text,
+                {
+                    "state": self.conv.state.name,
+                    "pending_mode": self.conv.pending_mode,
+                    "known_slots": self.conv.context,
+                    "last_structured_query": self.conv.last_structured_query,
+                },
+            )
         except Exception as e:
             logger.warning("[classifier] llm error=%s", e)
             raw = {
@@ -732,34 +692,33 @@ class IntentRouter:
             }
 
         output = _validate_and_complete(raw)
-        self._log_decision(output)
+        self._last_output = output
+        logger.info(
+            "[router.decision] state=%s source=%s message_type=%s target_mode=%s action=%s confidence=%s complete=%s missing=%s slots=%s",
+            self.conv.state.name,
+            output.source,
+            output.message_type,
+            output.target_mode,
+            output.action,
+            output.confidence,
+            output.complete,
+            output.missing_slots,
+            output.slots,
+        )
         return output
 
-    def _conversation_context(self) -> dict[str, Any]:
-        return {
-            "state": self.conv.state.name,
-            "pending_mode": self.conv.pending_mode,
-            "known_slots": self.conv.context,
-            "last_structured_query": self.conv.last_structured_query,
-        }
-
-    def _context_target_mode(self) -> str | None:
-        if self.conv.pending_mode in {"summary", "topic", "example"}:
-            return self.conv.pending_mode
-        if self.conv.last_structured_query:
+    def _prepare_output(self, output: RouterOutput) -> RouterOutput:
+        context_mode = self.conv.pending_mode if self.conv.pending_mode in {"summary", "topic", "example"} else None
+        if context_mode is None and self.conv.last_structured_query:
             mode = self.conv.last_structured_query.get("analysis_type")
             if mode in {"summary", "topic", "example"}:
-                return mode
-        return None
-
-    def _prepare_output(self, output: RouterOutput) -> RouterOutput:
-        context_mode = self._context_target_mode()
+                context_mode = mode
         has_context = bool(self.conv.context or self.conv.last_structured_query)
 
         if (
             output.message_type == "ambiguous"
             and has_context
-            and _has_meaningful_slot(output.slots)
+            and any(value is not None for key, value in output.slots.items() if key != "metric")
         ):
             output.message_type = "analytics"
             output.target_mode = context_mode or "none"
@@ -805,12 +764,14 @@ class IntentRouter:
 
         if output.requires_confirmation and output.complete:
             query = output.structured_query or _build_structured_query(output.target_mode, output.slots, {})
-            mode = _mode_for_target(output.target_mode)
+            mode = output.target_mode if output.target_mode in {"summary", "topic", "example"} else "summary"
             params = _params_from_query(query)
             self.conv.pending_mode = mode
             self.conv.pending_params = params
             self.conv.last_structured_query = asdict(query)
-            self._set_state(State.DETAIL, "requires_confirmation")
+            old_state = self.conv.state
+            self.conv.state = State.DETAIL
+            self._log_transition(old_state, self.conv.state, "requires_confirmation")
             return RouterResult(
                 "confirm",
                 output.assistant_message or "Bu sorguyu calistirmadan once onaylar misiniz?",
@@ -819,16 +780,20 @@ class IntentRouter:
 
         if output.action == "ask_detail" or not output.complete:
             self.conv.pending_mode = None if output.target_mode == "none" else output.target_mode
-            self._set_state(State.DETAIL, f"missing_slots_{','.join(output.missing_slots)}")
+            old_state = self.conv.state
+            self.conv.state = State.DETAIL
+            self._log_transition(old_state, self.conv.state, f"missing_slots_{','.join(output.missing_slots)}")
             return RouterResult("detail", _clarify_message(output), self.conv.context.copy())
 
         query = output.structured_query or _build_structured_query(output.target_mode, output.slots, {})
         params = _params_from_query(query)
-        mode = _mode_for_target(output.target_mode)
+        mode = output.target_mode if output.target_mode in {"summary", "topic", "example"} else "summary"
         self.conv.pending_mode = mode
         self.conv.pending_params = params
         self.conv.last_structured_query = asdict(query)
-        self._set_state(State.RESPONSE, f"ready_{output.target_mode}")
+        old_state = self.conv.state
+        self.conv.state = State.RESPONSE
+        self._log_transition(old_state, self.conv.state, f"ready_{output.target_mode}")
         logger.info("[router.ready] mode=%s structured_query=%s params=%s", mode, self.conv.last_structured_query, params)
 
         return RouterResult(
@@ -849,21 +814,50 @@ class IntentRouter:
                 {},
             )
 
-        self._log_transition(self.conv.state, self.conv.state, output.message_type)
-        return RouterResult(
-            "detail",
-            output.assistant_message or self._pending_detail_message(),
-            self.conv.context.copy(),
-        )
+        if output.assistant_message:
+            response = output.assistant_message
+        elif self.conv.pending_mode == "example":
+            response = "Yorumlari getirmek icin tarih, kategori, segment veya duygu gibi bir filtre belirtir misiniz?"
+        elif self.conv.pending_mode == "topic":
+            response = "Konu analizini tamamlamak icin tarih ve kategori/konu detayini belirtir misiniz?"
+        elif self.conv.pending_mode == "summary":
+            response = "Ozeti tamamlamak icin hangi donem icin bakacagimi belirtir misiniz?"
+        else:
+            response = "Sorguyu netlestirmek icin biraz daha detay verir misiniz?"
 
-    def _pending_detail_message(self) -> str:
-        if self.conv.pending_mode == "example":
-            return "Yorumlari getirmek icin tarih, kategori, segment veya duygu gibi bir filtre belirtir misiniz?"
-        if self.conv.pending_mode == "topic":
-            return "Konu analizini tamamlamak icin tarih ve kategori/konu detayini belirtir misiniz?"
-        if self.conv.pending_mode == "summary":
-            return "Ozeti tamamlamak icin hangi donem icin bakacagimi belirtir misiniz?"
-        return "Sorguyu netlestirmek icin biraz daha detay verir misiniz?"
+        self._log_transition(self.conv.state, self.conv.state, output.message_type)
+        return RouterResult("detail", response, self.conv.context.copy())
+
+    def _debug_json(self, result: RouterResult, start_state: str) -> dict:
+        params = result.params or {}
+        query = result.structured_query or {}
+        date_range = query.get("date_range") or {}
+        filters = query.get("filters") or {}
+        output = query.get("output") or {}
+
+        return {
+            "state_json": {
+                "type": "state",
+                "changed": start_state != self.conv.state.name,
+                "from": start_state,
+                "to": self.conv.state.name,
+            },
+            "final_json": {
+                "type": "final",
+                "mode": result.mode,
+                "needs_data": result.needs_data,
+                "date": {
+                    "start": params.get("date_start") or date_range.get("start"),
+                    "end": params.get("date_end") or date_range.get("end"),
+                    "label": params.get("date_label") or date_range.get("raw"),
+                },
+                "category": params.get("category") or filters.get("category"),
+                "segment": params.get("segment") or filters.get("nps_segment"),
+                "emotion": params.get("emotion") or filters.get("emotion"),
+                "comment_type": params.get("comment_type") or filters.get("comment_type"),
+                "limit": params.get("limit") or output.get("limit"),
+            },
+        }
 
     def _merge_context(self, output: RouterOutput):
         before = self.conv.context.copy()
@@ -883,7 +877,21 @@ class IntentRouter:
         for key, value in self.conv.context.items():
             if slots.get(key) is None:
                 slots[key] = value
-        slots = _apply_context_year(slots, self.conv.context, self.conv.last_structured_query)
+        raw_date = slots.get("date_expression")
+        if raw_date and _contains_month_name(raw_date) and not re.search(r"\b\d{4}\b", str(raw_date)):
+            year = None
+            context_date = self.conv.context.get("date_expression")
+            if context_date:
+                match = re.search(r"\b(\d{4})\b", str(context_date))
+                if match:
+                    year = int(match.group(1))
+            if year is None and self.conv.last_structured_query:
+                start = (self.conv.last_structured_query.get("date_range") or {}).get("start")
+                match = re.match(r"(\d{4})-", str(start or ""))
+                if match:
+                    year = int(match.group(1))
+            if year:
+                slots["date_expression"] = f"{raw_date} {year}"
         date_range, _ = _normalize_date_expression(slots.get("date_expression"))
         if not date_range and slots.get("period"):
             date_range, _ = _normalize_date_expression(slots["period"])
@@ -914,20 +922,6 @@ class IntentRouter:
         output.action = "run_query" if output.complete else "ask_detail"
         return output
 
-    def _log_decision(self, output: RouterOutput):
-        logger.info(
-            "[router.decision] state=%s source=%s message_type=%s target_mode=%s action=%s confidence=%s complete=%s missing=%s slots=%s",
-            self.conv.state.name,
-            output.source,
-            output.message_type,
-            output.target_mode,
-            output.action,
-            output.confidence,
-            output.complete,
-            output.missing_slots,
-            output.slots,
-        )
-
     def _log_transition(self, old_state: State, new_state: State, reason: str):
         logger.info(
             "[router.transition] %s -> %s reason=%s pending=%s context=%s",
@@ -937,11 +931,6 @@ class IntentRouter:
             self.conv.pending_mode,
             self.conv.context,
         )
-
-    def _set_state(self, next_state: State, reason: str):
-        old_state = self.conv.state
-        self.conv.state = next_state
-        self._log_transition(old_state, next_state, reason)
 
     def _go_direct(self, reason: str):
         old_state = self.conv.state

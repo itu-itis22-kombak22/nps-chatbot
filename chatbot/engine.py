@@ -10,6 +10,7 @@ Kullanım:
 
 from __future__ import annotations
 import argparse
+import json
 import logging
 import sys
 
@@ -29,11 +30,13 @@ Selamlama veya genel sorularda kısaca kendini tanıt ve ne yapabileceğini söy
 class NPSChatbot:
     def __init__(self):
         self.router = IntentRouter()
+        self.last_debug_json: dict | None = None
         self._history: list[dict] = []   # konuşma geçmişi (LLM context için)
 
     def chat(self, user_message: str) -> str:
         logger.info("[chat] received chars=%s", len(user_message))
         result: RouterResult = self.router.process(user_message)
+        self.last_debug_json = self.router.last_debug_json
         logger.info(
             "[chat] router_result mode=%s needs_data=%s params=%s response_preview=%r",
             result.mode,
@@ -118,7 +121,14 @@ class NPSChatbot:
     def reset(self):
         self.router.reset()
         self._history = []
+        self.last_debug_json = None
         logger.info("[chat] history_reset")
+
+
+def _format_debug_json(payload: dict | None) -> str:
+    if payload is None:
+        return "{}"
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def main() -> None:
@@ -127,16 +137,22 @@ def main() -> None:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default="ERROR",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Terminal log seviyesi.",
     )
     parser.add_argument(
+        "--show-json",
+        action="store_true",
+        help="Her cevaptan sonra state ve final parametre JSON'larini yazdirir.",
+    )
+    parser.add_argument(
         "--router-debug",
         action="store_true",
-        help="Sadece router karar loglarini DEBUG seviyesine alir; HTTP loglarini sessiz tutar.",
+        help="Geriye uyumlu kisa yol: --show-json ile ayni iki JSON ciktisini acar.",
     )
     args = parser.parse_args()
+    show_json = args.show_json or args.router_debug
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
@@ -146,9 +162,6 @@ def main() -> None:
     logging.getLogger("nps_chatbot.llm").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    if args.router_debug:
-        logging.getLogger("nps_chatbot.router").setLevel(logging.DEBUG)
-        logging.getLogger("nps_chatbot.engine").setLevel(logging.INFO)
 
     bot = NPSChatbot()
     exit_commands = {"exit", "quit", "q", "çık", "cikis"}
@@ -180,6 +193,11 @@ def main() -> None:
 
         response = bot.chat(user_message)
         print(f"\nBot> {response}\n")
+        if show_json:
+            debug_json = bot.last_debug_json or {}
+            print(_format_debug_json(debug_json.get("state_json")))
+            print(_format_debug_json(debug_json.get("final_json")))
+            print()
 
 
 if __name__ == "__main__":
